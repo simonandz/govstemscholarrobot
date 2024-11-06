@@ -1,0 +1,99 @@
+#pip install osmnx networkx pyserial smbus
+
+import osmnx as ox
+import networkx as nx
+import serial
+print("serial module location:", serial.__file__)
+import math
+import time
+#import smbus
+
+ser = serial.Serial('COM3', 9600, timeout=1) #switch com3 to serial port for microcontroller
+
+time.sleep(2)  #idk why doesnt work without a delay for connection with arduino
+
+#movement command functions
+def send_command(command):
+    ser.write(f"{command}\n".encode())
+    print(f"Sent command: {command}")
+
+def move_forward(distance):
+    send_command(f"FORWARD {distance}")
+
+def turn_angle(angle):
+    send_command(f"TURN {angle}")
+
+def stop_movement():
+    send_command("STOP")
+
+#shortest path function
+def global_path_planning(origin_point, destination_point):
+    G = ox.graph_from_point(origin_point, dist=5000, network_type='walk')
+    
+    orig_node = ox.nearest_nodes(G, origin_point[1], origin_point[0])
+    dest_node = ox.nearest_nodes(G, destination_point[1], destination_point[0])
+    
+    route = nx.shortest_path(G, orig_node, dest_node, weight='length')
+    return route, G
+
+#function to take nodes from global_path_planning and converts them into movement commands
+def route_to_commands(route, G):
+    commands = []
+    prev_x = prev_y = None
+    current_heading = None 
+
+    for node in route:
+        x = G.nodes[node]['x']
+        y = G.nodes[node]['y']
+
+        if prev_x is not None and prev_y is not None:
+            distance = ox.distance.euclidean_dist_vec(prev_y, prev_x, y, x)
+            delta_x = x - prev_x
+            delta_y = y - prev_y
+            desired_heading_rad = math.atan2(delta_y, delta_x)
+            desired_heading_deg = math.degrees(desired_heading_rad)
+
+            if desired_heading_deg < 0:
+                desired_heading_deg += 360.0
+
+            if current_heading is None:
+                relative_angle = 0.0  
+
+            else:
+                relative_angle = desired_heading_deg - current_heading
+
+                if relative_angle > 180.0:
+                    relative_angle -= 360.0
+
+                elif relative_angle < -180.0:
+                    relative_angle += 360.0
+
+            commands.append(('TURN', relative_angle))
+            commands.append(('FORWARD', distance))
+            current_heading = desired_heading_deg  
+
+        else:
+            current_heading = None  
+
+        prev_x, prev_y = x, y
+    return commands
+
+#main code
+if __name__ == "__main__":
+    origin_point = (40.7423, -74.1790)       #put in current point (ex: njit)
+    destination_point = (40.5008, -74.4474)  #put in destination point (ex: rutgers)
+    route, G = global_path_planning(origin_point, destination_point)
+    ox.plot_graph_route(G, route, node_size=0) #route visuilization delete later / export it to app
+
+    commands = route_to_commands(route, G)
+    
+    #send commands
+    for cmd, value in commands:
+        if cmd == 'TURN':
+            turn_angle(value)
+            time.sleep(1)  
+            
+        elif cmd == 'FORWARD':
+            move_forward(value)
+            time.sleep(1) 
+    stop_movement()
